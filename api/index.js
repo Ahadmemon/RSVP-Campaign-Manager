@@ -13,16 +13,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Ensure DB is connected before any route runs
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (err) {
-    res.status(503).json({ success: false, error: 'Database unavailable' });
-  }
-});
-
 // Recalculate campaign stat counters from live DB
 const recalculateStats = async (campaignId) => {
   const counts = await Invitee.aggregate([
@@ -43,19 +33,24 @@ const recalculateStats = async (campaignId) => {
 
 // ─── Health Check ────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
-  const state = mongoose.connection.readyState;
-  res.json({
-    status: 'healthy',
-    mode: state === 1 ? 'MongoDB Live' : 'Disconnected',
-    timestamp: new Date().toISOString(),
-  });
+  try {
+    await connectDB();
+    const state = mongoose.connection.readyState;
+    res.json({
+      status: 'healthy',
+      mode: state === 1 ? 'MongoDB Live' : 'Disconnected',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(503).json({ status: 'unhealthy', error: error.message });
+  }
 });
 
 // ─── GET /api/campaigns ───────────────────────────────────────────────────────
 app.get('/api/campaigns', async (req, res) => {
   try {
+    await connectDB();
     const campaigns = await Campaign.find().sort({ createdAt: -1 });
-    // Refresh stats for each campaign
     for (const c of campaigns) {
       await recalculateStats(c._id);
     }
@@ -69,6 +64,7 @@ app.get('/api/campaigns', async (req, res) => {
 // ─── GET /api/campaigns/:id ───────────────────────────────────────────────────
 app.get('/api/campaigns/:id', async (req, res) => {
   try {
+    await connectDB();
     const { id } = req.params;
     await recalculateStats(id);
     const campaign = await Campaign.findById(id);
@@ -82,6 +78,7 @@ app.get('/api/campaigns/:id', async (req, res) => {
 // ─── POST /api/campaigns ──────────────────────────────────────────────────────
 app.post('/api/campaigns', async (req, res) => {
   try {
+    await connectDB();
     const { name, eventDate, location, description } = req.body;
     if (!name || !eventDate || !location) {
       return res.status(400).json({ success: false, error: 'Name, eventDate, and location are required' });
@@ -103,6 +100,7 @@ app.post('/api/campaigns', async (req, res) => {
 // ─── GET /api/invitees ────────────────────────────────────────────────────────
 app.get('/api/invitees', async (req, res) => {
   try {
+    await connectDB();
     const { campaignId, search, status, page = 1, limit = 50 } = req.query;
 
     const query = {};
@@ -140,6 +138,7 @@ app.get('/api/invitees', async (req, res) => {
 // ─── POST /api/invitees/upload ────────────────────────────────────────────────
 app.post('/api/invitees/upload', async (req, res) => {
   try {
+    await connectDB();
     const { campaignId, invitees } = req.body;
     if (!campaignId || !Array.isArray(invitees)) {
       return res.status(400).json({ success: false, error: 'campaignId and invitees array are required' });
@@ -167,7 +166,6 @@ app.post('/api/invitees/upload', async (req, res) => {
       }
     });
 
-    // Deduplicate by phone within payload
     const uniqueMap = new Map();
     validRows.forEach((item) => uniqueMap.set(item.phone, item));
     const deduped = Array.from(uniqueMap.values());
@@ -200,6 +198,7 @@ app.post('/api/invitees/upload', async (req, res) => {
 // ─── PATCH /api/invitees/:id ──────────────────────────────────────────────────
 app.patch('/api/invitees/:id', async (req, res) => {
   try {
+    await connectDB();
     const { id } = req.params;
     const updates = req.body;
     const invitee = await Invitee.findByIdAndUpdate(id, { $set: updates }, { new: true });
@@ -254,7 +253,6 @@ const generateSimulatedCall = (inviteeName, campaignName) => {
     },
   ];
 
-  // Weighted distribution: 50% Confirmed, 25% Declined, 15% Undecided, 10% Failed
   const rand = Math.random();
   if (rand < 0.50) return outcomes[0];
   if (rand < 0.75) return outcomes[1];
@@ -265,6 +263,7 @@ const generateSimulatedCall = (inviteeName, campaignName) => {
 // ─── POST /api/campaigns/:id/start ───────────────────────────────────────────
 app.post('/api/campaigns/:id/start', async (req, res) => {
   try {
+    await connectDB();
     const { id } = req.params;
     const { triggerExternalTring = false } = req.body;
 
@@ -332,6 +331,7 @@ app.post('/api/campaigns/:id/start', async (req, res) => {
 // ─── POST /api/webhooks/call-status ──────────────────────────────────────────
 app.post('/api/webhooks/call-status', async (req, res) => {
   try {
+    await connectDB();
     const { invitee_id, call_id, disposition, duration, transcript, status } = req.body;
     if (!invitee_id) return res.status(400).json({ success: false, error: 'invitee_id is required' });
 
