@@ -3,12 +3,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
-/**
- * Global is used here to maintain a cached connection across hot reloads
- * in development and serverless executions on Vercel.
- */
 let cached = global.mongoose;
 
 if (!cached) {
@@ -18,39 +12,44 @@ if (!cached) {
 export async function connectDB() {
   const uri = process.env.MONGODB_URI;
 
+  if (!uri) {
+    throw new Error('MONGODB_URI is not set');
+  }
+
+  // If already connected, return immediately
   if (cached.conn && mongoose.connection.readyState === 1) {
     return cached.conn;
   }
 
-  if (!uri) {
-    console.warn('[Database] MONGODB_URI is not set. Operating in fallback mock mode or memory mode.');
-    return null;
+  // Reset promise if connection dropped
+  if (mongoose.connection.readyState === 0) {
+    cached.conn = null;
+    cached.promise = null;
   }
 
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
       family: 4,
     };
 
-    cached.promise = mongoose.connect(uri, opts).then((mongooseInstance) => {
-      console.log('[Database] MongoDB Connected Successfully via cached Mongoose connection pool');
-      return mongooseInstance;
-    }).catch((err) => {
-      console.error('[Database] MongoDB Connection Error:', err.message);
-      cached.promise = null;
-      return null;
-    });
+    cached.promise = mongoose
+      .connect(uri, opts)
+      .then((m) => {
+        console.log('[DB] Connected');
+        return m;
+      })
+      .catch((err) => {
+        console.error('[DB] Connection failed:', err.message);
+        cached.promise = null;
+        cached.conn = null;
+        throw err;
+      });
   }
 
-  try {
-    cached.conn = await cached.promise;
-  } catch (e) {
-    cached.promise = null;
-    throw e;
-  }
-
+  cached.conn = await cached.promise;
   return cached.conn;
 }
 
